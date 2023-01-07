@@ -1,13 +1,37 @@
-import numpy as np
 import math
-import os
-import pandas as pd
 import random
-import net
-import iso
-import dense
-import GBDT
-from sklearn.metrics import accuracy_score, recall_score, f1_score
+import numpy as np
+from sklearn import preprocessing
+
+
+def rand(a, b):
+    return (b - a) * random.random() + a
+
+
+def make_matrix(m, n, fill=1.0):  # 创造一个指定大小的矩阵
+    mat = []
+    for i in range(m):
+        mat.append([fill] * n)
+    return mat
+
+
+def sigmoid(x):  # 创建一个 sigmod 函数
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def sigmoid_derivate(x):  # 创建一个 sigmod 导数
+    return x * (1 - x)
+
+
+def get_0_1_array(m, n, rate=0.2):
+    array = np.ones(m * n).reshape(m, n)
+    zeros_num = int(array.size * rate)  # 根据0的比率来得到 0的个数
+    new_array = np.ones(array.size)  # 生成与原来模板相同的矩阵，全为1
+    new_array[:zeros_num] = 0  # 将一部分换为0
+    np.random.shuffle(new_array)  # 将0和1的顺序打乱
+    re_array = new_array.reshape(array.shape)  # 重新定义矩阵的维度，与模板相同
+    return re_array.tolist()
+
 
 def read_data():
     fileHandler1 = open("train_data", "r")
@@ -26,21 +50,177 @@ def read_data():
         newline = line.strip("\n").split(",")
         newline_ = [float(x) for x in newline]
         data2.append(newline_)
-    data1 = data1[:10]
-    data2 = data2[:100]
+    data1 = data2[:100]
+    data2 = data2[:1000]
     return np.array(data1), np.array(data2)
 
 
-def calc(y_true, y_pre):
+class network(object):
+    def __init__(self, ni, nh, no):
+        self.input_n = ni + 1  # 输入层+偏置项
+        self.hidden_n = nh
+        self.output_n = no
+        self.input_cells = [1.0] * self.input_n
+        self.hidden1_cells = [1.0] * self.hidden_n
+        self.hidden2_cells = [1.0] * self.hidden_n
+        self.output_cells = [1.0] * self.output_n
+
+        self.input_weights = make_matrix(self.input_n, self.hidden_n)
+        self.hidden_weights = make_matrix(self.hidden_n, self.hidden_n)
+        self.output_weights = make_matrix(self.hidden_n, self.output_n)
+        self.sparse_input = np.ones((self.input_n, self.hidden_n))
+        self.sparse_hidden = np.ones((self.hidden_n, self.hidden_n))
+
+        for i in range(self.input_n):
+            for h in range(self.hidden_n):
+                self.input_weights[i][h] = rand(-0.2, 0.2)
+
+        for i in range(self.hidden_n):
+            for h in range(self.hidden_n):
+                self.hidden_weights[i][h] = rand(-1, 1)
+
+        for h in range(self.hidden_n):
+            for o in range(self.output_n):
+                self.output_weights[h][o] = rand(-2.0, 2.0)
+
+        self.input_correction = make_matrix(self.input_n, self.hidden_n)
+        self.hidden_correction = make_matrix(self.hidden_n, self.hidden_n)
+        self.output_correction = make_matrix(self.hidden_n, self.output_n)
+
+    def purn(self):
+        for i in range(self.input_n):
+            for h in range(self.hidden_n):
+                if abs(self.input_weights[i][h]) < 0.02:
+                    self.input_weights[i][h] = 0
+                    self.sparse_input[i][h] = 0
+        for i in range(self.hidden_n):
+            for h in range(self.hidden_n):
+                if abs(self.hidden_weights[i][h]) < 0.1:
+                    self.hidden_weights[i][h] = 0
+                    self.sparse_hidden[i][h] = 0
+
+    def predict(self, inputs):
+        for i in range(self.input_n - 1):
+            self.input_cells[i] = inputs[i]
+
+        for j in range(self.hidden_n):
+            total = 0.0
+            for i in range(self.input_n):
+                total += self.input_cells[i] * self.input_weights[i][j]
+            self.hidden1_cells[j] = sigmoid(total)
+
+        for j in range(self.hidden_n):
+            total = 0.0
+            for i in range(self.hidden_n):
+                total += self.hidden1_cells[i] * self.hidden_weights[i][j]
+            self.hidden2_cells[j] = sigmoid(total)
+
+        for k in range(self.output_n):
+            total = 0.0
+            for j in range(self.hidden_n):
+                total += self.hidden2_cells[j] * self.output_weights[j][k]  # + self.bias_output[k]
+
+            self.output_cells[k] = sigmoid(total)
+        return self.output_cells[:]
+
+    def back_propagate(self, case, label, learn, correct):
+        # 计算得到输出output_cells
+        self.predict(case)
+        output_deltas = [0.0] * self.output_n
+        error = 0.0
+        # 计算误差 = 期望输出-实际输出
+        for o in range(self.output_n):
+            error = label[o] - self.output_cells[o]  # 正确结果和预测结果的误差：0,1，-1
+            output_deltas[o] = sigmoid_derivate(self.output_cells[o]) * error  # 误差稳定在0~1内
+
+        hidden2_deltas = [0.0] * self.hidden_n
+        for j in range(self.hidden_n):
+            error = 0.0
+            for k in range(self.output_n):
+                error += output_deltas[k] * self.output_weights[j][k]
+            hidden2_deltas[j] = sigmoid_derivate(self.hidden2_cells[j]) * error
+
+        hidden1_deltas = [0.0] * self.hidden_n
+        for j in range(self.hidden_n):
+            error = 0.0
+            for k in range(self.hidden_n):
+                error += hidden2_deltas[k] * self.hidden_weights[j][k]
+            hidden1_deltas[j] = sigmoid_derivate(self.hidden1_cells[j]) * error
+
+        for h in range(self.hidden_n):
+            for o in range(self.output_n):
+                change = output_deltas[o] * self.hidden2_cells[h]
+                # 调整权重：上一层每个节点的权重学习*变化+矫正率
+                self.output_weights[h][o] += learn * change
+
+        for i in range(self.hidden_n):
+            for h in range(self.hidden_n):
+                if self.sparse_hidden[i][h] == 1:
+                    change = hidden2_deltas[h] * self.hidden1_cells[i]
+                    self.hidden_weights[i][h] += learn * change
+
+        for i in range(self.input_n):
+            for h in range(self.hidden_n):
+                if self.sparse_input[i][h] == 1:
+                    change = hidden1_deltas[h] * self.input_cells[i]
+                    self.input_weights[i][h] += learn * change
+
+        error = 0
+        for o in range(len(label)):
+            for k in range(self.output_n):
+                error += 0.5 * (label[o] - self.output_cells[k]) ** 2
+
+        return error
+
+    def train(self, cases, labels, limit, learn, correct=0.1):
+
+        for i in range(limit):
+            error = 0.0
+            # learn = le.arn_speed_start /float(i+1)
+            for j in range(len(cases)):
+                case = cases[j]
+                label = labels[j]
+
+                error += self.back_propagate(case, label, learn, correct)
+            print(self.hidden_weights[0][0], self.hidden_correction[0][0], self.hidden1_cells[0])
+            print("error:", error)
+
+
+def manual_label(net_list, test_x, test_y):
+    dic = {}
+    p = len(net_list)
+    lis = []
+    for i in range(0, len(test_x)):
+        abnormal = 0
+        normal = 0
+        for j in range(0, p):
+            if net_list[j].predict(test_x[i])[0] > 0.5:
+                abnormal = abnormal + 1
+            else:
+                normal = normal + 1
+        dic[i] = math.fabs(abnormal - normal)
+        # 选出分歧最大的交给人工标注
+        lis = sorted(dic.items(), key=lambda x: x[1])
+    for k in range(0, 10):
+        b = test_data[lis[k][0]][len(test_data[lis[k][0]]) - 1]
+        b = int(b)
+        manu_data = [test_x[lis[k][0]]]
+        manu_label = [[b]]
+        for i in range(0, p):
+            net_list[i].train(manu_data, manu_label, 1, 0.1, 0.1)  # 再学习
+
+
+def calc_accres(y_true, y_pre):
     TP, FN, FP, TN = 0, 0, 0, 0
     for i in range(len(y_true)):
-        if y_true[i] == 1 and y_pre[i] == 1:
+        print(y_true[i], y_pre[i])
+        if y_true[i] == 0 and y_pre[i] == 0:
             TP += 1
-        elif y_true[i] == 1 and y_pre[i] == 0:
-            FN += 1
-        elif y_true[i] == 0 and y_pre[i] == 0:
-            TN += 1
         elif y_true[i] == 0 and y_pre[i] == 1:
+            FN += 1
+        elif y_true[i] == 1 and y_pre[i] == 1:
+            TN += 1
+        elif y_true[i] == 1 and y_pre[i] == 0:
             FP += 1
     print(TP, FN, FP, TN)
     acc = TP / (TP + FP)
@@ -48,8 +228,37 @@ def calc(y_true, y_pre):
     return acc, rec
 
 
-def test():
-    from sklearn import preprocessing
+def work(train_x, train_y, test_x, test_y):
+    # 集成神经网路个数为p
+    net_list = []
+    p = 5
+    for i in range(0, p):
+        net_list.append(network(m - 1, int(m / 2), 1))
+
+    for i in range(0, p):
+        net_list[i].train(train_x, train_y, 1, 0.1, 0.1)
+    for i in range(0, p):
+        net_list[i].purn()
+    for i in range(0, p):
+        net_list[i].train(train_x, train_y, 1, 0.1, 0.1)
+
+    manual_label(net_list, train_x, train_y)
+
+    # 在测试集合上进行测试
+    oup = []
+    for i in range(0, len(test_x)):
+        s = 0
+        print(str(i) + "/" + str(len(test_x)))
+        for j in range(0, len(net_list)):
+            s = s + net_list[j].predict(test_x[i])[0]
+        if s > p / 2:
+            oup.append(1)
+        else:
+            oup.append(0)
+    return calc_accres(oup, test_y)
+
+
+if __name__ == "__main__":
     # 读取数据
     train_data, test_data = read_data()
     m = len(train_data[0])
@@ -60,56 +269,5 @@ def test():
 
     test_x = min_max_scaler_train.fit_transform(test_data[:, :-1])
     test_y = test_data[:, m - 1: m]
-
-    iso_acc, iso_rec = iso.work(train_x, train_y, test_x, test_y)
-    GBDT_acc, GBDT_rec = iso.work(train_x, train_y, test_x, test_y)
-    dense_acc, dense_rec = iso.work(train_x, train_y, test_x, test_y)
-    net_acc, net_rec = iso.work(train_x, train_y, test_x, test_y)
-    return iso_acc, iso_rec, GBDT_acc, GBDT_rec, dense_acc, dense_rec, net_acc, net_rec
-
-
-def draw():
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import random
-    x=[2,4,6,8,10]
-    acc1=[0.43,0.56,0.65,0.76,0.7]
-    acc2=[0.42,0.57,0.69,0.79,0.82]
-    rec1=[0.45,0.58,0.67,0.77,0.74]
-    rec2=[0.44,0.55,0.67,0.75,0.78]
-    plt.rcParams['font.family'] = 'STSong'  # 修改了全局变量
-    ax1 = plt.subplot(121)
-    ax1.scatter(x, acc1)
-    ax1.plot(x, acc1, linewidth=3.0, label='Dense net')
-    ax1.scatter(x, acc2)
-    ax1.plot(x, acc2, linewidth=3.0, label='AADSNN')
-    ax1.set_xlabel("迭代次数", fontsize=25)
-    ax1.set_ylabel("准确率", fontsize=25)
-    ax1.set_xticks(x)
-    y = np.arange(0.2, 0.95, 0.1)
-    ax1.set_yticks(y)
-    ax1.tick_params(labelsize=17)  # 刻度字体大小13
-    ax1.legend(prop={'size': 20})
-
-    ax2 = plt.subplot(122)
-    ax2.scatter(x, rec1)
-    ax2.plot(x, rec1, linewidth=3.0, label='Dense net')
-    ax2.scatter(x, rec2)
-    ax2.plot(x, rec2, linewidth=3.0, label='AADSNN')
-    ax2.set_xlabel("迭代次数", fontsize=25)
-    ax2.set_ylabel("召回率", fontsize=25)
-    ax2.set_xticks(x)
-    y = np.arange(0.2, 0.95, 0.1)
-    ax2.set_yticks(y)
-    ax2.tick_params(labelsize=17)  # 刻度字体大小13
-    ax2.legend(prop={'size': 20})
-
-    plt.show()
-
-
-if __name__ == "__main__":
-    acc1 = []
-    acc2 = []
-    rec1 = []
-    rec2 = []
-    draw()
+    res = work(train_x, train_y, test_x, test_y)
+    print(res)
